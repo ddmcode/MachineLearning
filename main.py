@@ -4,7 +4,6 @@ from mpl_toolkits.mplot3d import Axes3D
 from matplotlib.animation import FuncAnimation
 import numpy as np
 import os
-from pprint import pprint
 
 
 class UserData:
@@ -12,9 +11,23 @@ class UserData:
     def __init__(self, user_label, class_label, data_dir, z_correction=None):
         self._user_label = user_label
         self._class_label = class_label
+
         self._time = []
         self._frames = []
         self._targets = []
+        self._data1 = []
+        self._data2 = []
+
+        self._key_length_indices = [( 2, 17), (10, 27), ( 2, 89), (10, 89),
+                                    (48, 54), (39, 89), (44, 89), (57, 51),
+                                    (17, 27), (39, 57), (44, 57)]
+        a = 87 # 4
+        b = 12 # 10
+        self._key_angle_indices = [(48, 89, 54), (51, 54, 57), (51, 48, 57),
+                                   (57, 54, 89), (57, 48, 89), ( b,  a, 27),
+                                   (17,   b, a)]
+        self._key_z_indices = [2, 4, 10, 12, 16, 17, 20, 26, 27, 30, 39, 44, 48, 51, 54, 57, 89]
+
         self._polygon_data = [
             (  8, True),
             ( 16, True),
@@ -28,7 +41,9 @@ class UserData:
             ( 95, False),
             (100, False),
             ]
+
         self._read_files(data_dir, z_correction)
+        self._extract_data()
 
     def _read_files(self, data_dir, z_correction):
         def remove_z_outliers(data):
@@ -55,6 +70,34 @@ class UserData:
             for line in f:
                 self._targets.append(int(line))
 
+    def _extract_data(self):
+        for frame_data in self._frames:
+            x, y, z = frame_data
+            # Key distance values
+            key_lengths = []
+            for i1, i2 in self._key_length_indices:
+                a = np.array([x[i1], y[i1]])
+                b = np.array([x[i2], y[i2]])
+                length = np.linalg.norm(b - a)
+                key_lengths.append(length)
+            # Key angle values
+            key_angles = []
+            for i1, i2, i3 in self._key_angle_indices:
+                # https://stackoverflow.com/questions/35176451/python-code-to-calculate-angle-between-three-point-using-their-3d-coordinates
+                a = np.array([x[i1], y[i1]])
+                b = np.array([x[i2], y[i2]])
+                c = np.array([x[i3], y[i3]])
+                ba = a - b
+                bc = c - b
+                cosine_angle = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc))
+                angle = np.arccos(cosine_angle)
+                key_angles.append(angle)
+            # Key z values
+            key_z_values = list(z[self._key_z_indices])
+            # combine
+            self._data1.append(np.array(key_lengths + key_angles))
+            self._data2.append(np.array(key_lengths + key_angles + key_z_values))
+
     def _polylines(self, frame_number):
         x, y, z = self._frames[frame_number]
         y = -y  # invert in y
@@ -73,8 +116,8 @@ class UserData:
         return line_data
 
     def _set_ax_properties(self, ax):
-        ax.set_xlim([255, 345])
-        ax.set_ylim([-260, -160])
+        ax.set_xlim([255, 355])
+        ax.set_ylim([-270, -160])
         ax.set_aspect("equal")
         ax.set_xlabel("x (pixels)")
         ax.set_ylabel("y (pixels)")
@@ -149,10 +192,10 @@ if __name__=="__main__":
     data_dir = os.path.join(src_dir, "data")
 
     # user labels: "a", "b"
-    # class labels: "affirmative", "conditional", "doubth", "emphasis", "negative", "relative", "topics", "wh", "yn"
-    user_data = UserData("a", "relative", data_dir, z_correction=0.1)
+    # class labels: "affirmative", "conditional", "doubt_question", "emphasis", "negative", "relative", "topics", "wh", "yn"
+    user_data = UserData("a", "doubt_question", data_dir, z_correction=0.1)
 
     # plot
-    user_data.plot2d(66, annotate=True, draw_polygons=True)
-    user_data.plot3d(66, draw_polygons=True)
+    user_data.plot2d(66, annotate=True, draw_polygons=True, show_plot=True)
+    user_data.plot3d(66, draw_polygons=True, show_plot=True)
     user_data.animate2d(show_plot=True)

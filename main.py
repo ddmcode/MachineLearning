@@ -4,20 +4,21 @@ from mpl_toolkits.mplot3d import Axes3D
 from matplotlib.animation import FuncAnimation
 import numpy as np
 import os
+from sklearn import metrics
+from sklearn import neural_network
+from sklearn import svm
 
 
-class UserData:
+class GFEData:
 
-    def __init__(self, user_label, class_label, data_dir, z_correction=None):
+    def __init__(self, user_label, class_label, data_dir):
+        self._time = []
+        self._frame_data = []
+        self._target_values = []
+        self._processed_data1 = []
+        self._processed_data2 = []
         self._user_label = user_label
         self._class_label = class_label
-
-        self._time = []
-        self._frames = []
-        self._targets = []
-        self._data1 = []
-        self._data2 = []
-
         self._key_length_indices = [( 2, 17), (10, 27), ( 2, 89), (10, 89),
                                     (48, 54), (39, 89), (44, 89), (57, 51),
                                     (17, 27), (39, 57), (44, 57)]
@@ -27,32 +28,31 @@ class UserData:
                                    (57, 54, 89), (57, 48, 89), ( b,  a, 27),
                                    (17,   b, a)]
         self._key_z_indices = [2, 4, 10, 12, 16, 17, 20, 26, 27, 30, 39, 44, 48, 51, 54, 57, 89]
+        self._read_data(data_dir)
+        self._process_data()
 
-        self._polygon_data = [
-            (  8, True),
-            ( 16, True),
-            ( 26, True),
-            ( 36, True),
-            ( 48, False),
-            ( 60, True),
-            ( 68, True),
-            ( 87, False),
-            ( 90, True),
-            ( 95, False),
-            (100, False),
-            ]
+    @property
+    def nFrames(self):
+        return len(self._target_values)
 
-        self._read_files(data_dir, z_correction)
-        self._extract_data()
+    @property
+    def frame_data(self):
+        return self._frame_data
 
-    def _read_files(self, data_dir, z_correction):
-        def remove_z_outliers(data):
-            z = data[2, :]
-            mean = np.mean(z)
-            z[z > (1 + z_correction) * mean] = None
-            z[z < (1 - z_correction) * mean] = None
-            data[2, :] = z
-        # Datapoints
+    @property
+    def target(self):
+        return self._target_values
+
+    @property
+    def data1(self):
+        return self._processed_data1
+
+    @property
+    def data2(self):
+        return self._processed_data2
+
+    def _read_data(self, data_dir):
+        # Read data points
         datapoints_file_path = os.path.join(data_dir, "{}_{}_datapoints.txt".format(self._user_label, self._class_label))
         with open(datapoints_file_path, "r") as f:
             reader = csv.reader(f, delimiter=' ')
@@ -61,17 +61,15 @@ class UserData:
                 values = [float(s) for s in row]
                 self._time.append(values.pop(0))
                 frame_data = np.transpose(np.array(values).reshape(-1, 3))
-                if z_correction:
-                    remove_z_outliers(frame_data)
-                self._frames.append(frame_data)
-        # Targets
+                self._frame_data.append(frame_data)
+        # Read target values
         targets_file_path = os.path.join(data_dir, "{}_{}_targets.txt".format(self._user_label, self._class_label))
         with open(targets_file_path, "r") as f:
             for line in f:
-                self._targets.append(int(line))
+                self._target_values.append(int(line))
 
-    def _extract_data(self):
-        for frame_data in self._frames:
+    def _process_data(self):
+        for frame_data in self._frame_data:
             x, y, z = frame_data
             # Key distance values
             key_lengths = []
@@ -95,11 +93,42 @@ class UserData:
             # Key z values
             key_z_values = list(z[self._key_z_indices])
             # combine
-            self._data1.append(np.array(key_lengths + key_angles))
-            self._data2.append(np.array(key_lengths + key_angles + key_z_values))
+            self._processed_data1.append(np.array(key_lengths + key_angles))
+            self._processed_data2.append(np.array(key_lengths + key_angles + key_z_values))
+
+
+class GFEDataPlotter:
+
+    def __init__(self, gfe_data):
+        self._gfe_data = gfe_data
+        self._polygon_data = [
+            (  8, True),
+            ( 16, True),
+            ( 26, True),
+            ( 36, True),
+            ( 48, False),
+            ( 60, True),
+            ( 68, True),
+            ( 87, False),
+            ( 90, True),
+            ( 95, False),
+            (100, False)]
+
+    def _set_2d_ax_properties(self, ax):
+        ax.set_xlim([255, 355])
+        ax.set_ylim([-270, -160])
+        ax.set_aspect("equal")
+        ax.set_xlabel("x (pixels)")
+        ax.set_ylabel("y (pixels)")
+
+    def _set_3d_ax_properties(self, ax):
+        ax.set_xlabel("x (pixels)")
+        ax.set_zlabel("y (pixels)")
+        ax.set_ylabel("z (mm)")
+        ax.view_init(elev=-166, azim=73)
 
     def _polylines(self, frame_number):
-        x, y, z = self._frames[frame_number]
+        x, y, z = self._gfe_data.frame_data[frame_number]
         y = -y  # invert in y
         llim = 0
         line_data = []
@@ -109,27 +138,14 @@ class UserData:
                 x_ = np.append(x_, x_[0])
                 y_ = np.append(y_, y_[0])
                 z_ = np.append(z_, z_[0])
-            line_colour = "r" if self._targets[frame_number] else "k"
+            line_colour = "r" if self._gfe_data.target[frame_number] else "k"
             line_style = "--" if ii == 8 else "-"
             line_data.append((x_, y_, z_, line_style + line_colour))
             llim = ulim
         return line_data
 
-    def _set_ax_properties(self, ax):
-        ax.set_xlim([255, 355])
-        ax.set_ylim([-270, -160])
-        ax.set_aspect("equal")
-        ax.set_xlabel("x (pixels)")
-        ax.set_ylabel("y (pixels)")
-
-    def print_frame_data(self, frame_number):
-        x, y, z = self._frames[frame_number]
-        print("{:5} {:20} {:20} {:20}".format(" ", "x", "y", "y"))
-        for ii, (x, y, z) in enumerate(zip(x, y, z)):
-            print("{5} {:20} {:20} {:20}".format(x, y, z))
-
     def plot2d(self, frame_number, subplot=111, fig_number=None, annotate=False, draw_polygons=False, color_lines=True, show_plot=False):
-        x, y, z = self._frames[frame_number]
+        x, y, z = self._gfe_data.frame_data[frame_number]
         y = -y  # invert in y
         fig = plt.figure(fig_number)
         ax = fig.add_subplot(subplot)
@@ -140,23 +156,21 @@ class UserData:
         if annotate:
             for ii, xy in enumerate(zip(x, y)):
                 ax.annotate(str(ii), xy)
-        self._set_ax_properties(ax)
+        self._set_2d_ax_properties(ax)
         if show_plot:
             plt.show()
 
     def plot3d(self, frame_number, subplot=111, fig_number=None, draw_polygons=False, color_lines=True, show_plot=False):
-        x, y, z = self._frames[frame_number]
-        y = y  # invert in y
+        x, y, z = self._gfe_data.frame_data[frame_number]
+        y = y  # Invert in y
+        z[z == 0.0] = None  # Remove z errors
         fig = plt.figure(fig_number)
         ax = fig.add_subplot(subplot, projection = '3d')
         ax.scatter(x, z, y)
         if draw_polygons:
             for x_, y_, z_, ls in self._polylines(frame_number):
                 ax.plot(x_, z_, -y_, ls)
-        ax.set_xlabel("x (pixels)")
-        ax.set_zlabel("y (pixels)")
-        ax.set_ylabel("z (mm)")
-        ax.view_init(elev=-166, azim=73)
+        self._set_3d_ax_properties(ax)
         if show_plot:
             plt.show()
 
@@ -168,22 +182,36 @@ class UserData:
                 ax.plot(x_, y_, ls)
             for ii, line in enumerate(ax.lines):
                 lines.append(line)
-            self._set_ax_properties(ax)
-            return lines
+            self._set_2d_ax_properties(ax)
+            text.set_text("Frame: 0")
+            return lines + [text,]
 
         def update(frame_number):
+            global frame_counter
             for ii, (x_, y_, z_, ls) in enumerate(self._polylines(frame_number)):
                 lines[ii].set_data(x_, y_)
                 lines[ii].set_color(ls[-1])
-            return lines
+            text.set_text("Frame: %i" % frame_number)
+            return lines + [text,]
 
         fig = plt.figure(fig_number)
         ax = fig.add_subplot(subplot)
         empty_data = [[] for _ in self._polygon_data]
         lines = plt.plot(empty_data, empty_data, animated=True)
-        ani = FuncAnimation(fig, update, frames=np.arange(100), init_func=init, blit=True, interval=75)
+        text = ax.text(0.05, 0.95, '', horizontalalignment='left', verticalalignment='top', transform=ax.transAxes)
+        ani = FuncAnimation(fig, update, frames=np.arange(self._gfe_data.nFrames), init_func=init, blit=True, interval=1000/27, repeat=False)
         if show_plot:
             plt.show()
+
+
+def train_and_predict(clf, training_data, testing_data, write_report=True):
+    clf.fit(training_data.data1, training_data.target)
+    predicted = clf.predict(testing_data.data1)
+    actual = testing_data.target
+    if write_report:
+        print(metrics.classification_report(actual, predicted, target_names=["Affirmative", "Negative"]))
+        #print(metrics.confusion_matrix(actual, predicted, labels=[0, 1]))
+    return (predicted, actual)
 
 
 if __name__=="__main__":
@@ -191,11 +219,29 @@ if __name__=="__main__":
     src_dir = os.path.dirname(__file__)
     data_dir = os.path.join(src_dir, "data")
 
-    # user labels: "a", "b"
-    # class labels: "affirmative", "conditional", "doubt_question", "emphasis", "negative", "relative", "topics", "wh", "yn"
-    user_data = UserData("a", "doubt_question", data_dir, z_correction=0.1)
+    # Class labels: "affirmative", "conditional", "doubt_question", "emphasis", "negative", "relative", "topics", "wh_question", "yn_question"
+    training_data = GFEData("a", "emphasis", data_dir )
+    testing_data = GFEData("b", "emphasis", data_dir )
 
-    # plot
-    user_data.plot2d(66, annotate=True, draw_polygons=True, show_plot=True)
-    user_data.plot3d(66, draw_polygons=True, show_plot=True)
-    user_data.animate2d(show_plot=True)
+    # Plot
+    # plotter = GFEDataPlotter(training_data)
+    # plotter.plot2d(66, annotate=True, draw_polygons=True, show_plot=True)
+    # plotter.plot3d(66, draw_polygons=True, show_plot=True)
+    # plotter.animate2d(show_plot=True)
+
+    # Sci-Kit Learn Support Vector Machine Classifier with user set gamma and C
+    # clf = svm.SVC()
+
+    # Sci-Kit Learn Multi-Layer Perceptron
+    for alpha in np.logspace(-5, -1, 5):
+        print("\nAlpha: %f\n" % alpha)
+        clf = neural_network.MLPClassifier(solver='lbfgs', alpha=alpha, hidden_layer_sizes=(10,))
+        train_and_predict(clf, training_data, testing_data)
+
+    #clf.fit(training_data.data1, training_data.target)
+    #predicted = clf.predict(testing_data.data1)
+    #actual = testing_data.target
+
+    #for alpha in np.logspace(-5, -1, 5):
+    #    print()
+    #print(metrics.classification_report(actual, predicted, target_names=["Affirmative", "Negative"]))

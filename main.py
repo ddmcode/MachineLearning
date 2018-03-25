@@ -7,11 +7,16 @@ import os
 from sklearn import metrics
 from sklearn import neural_network
 from sklearn import svm
+import warnings
+
+
+SRCDIR = os.path.dirname(__file__)
+DATADIR = os.path.join(SRCDIR, "data")
 
 
 class GFEData:
 
-    def __init__(self, user_label, class_label, data_dir):
+    def __init__(self, user_label, class_label):
         self._time = []
         self._frame_data = []
         self._target_values = []
@@ -28,7 +33,7 @@ class GFEData:
                                    (57, 54, 89), (57, 48, 89), ( b,  a, 27),
                                    (17,   b, a)]
         self._key_z_indices = [2, 4, 10, 12, 16, 17, 20, 26, 27, 30, 39, 44, 48, 51, 54, 57, 89]
-        self._read_data(data_dir)
+        self._read_data()
         self._process_data()
 
     @property
@@ -39,21 +44,27 @@ class GFEData:
     def frame_data(self):
         return self._frame_data
 
-    @property
-    def target(self):
-        return self._target_values
+    def target(self, window_size=1):
+        return self._target_values[:self.nFrames - window_size + 1]
 
-    @property
-    def data1(self):
-        return self._processed_data1
+    def _window_data(self, data, window_size):
+        windowed_data = []
+        for ii in range(self.nFrames - window_size + 1):
+            windowed_data.append(np.concatenate(self._processed_data1[ii:ii+window_size]))
+        return windowed_data
 
-    @property
-    def data2(self):
-        return self._processed_data2
+    def data1(self, window_size=1):
+        return self._window_data(self._processed_data1, window_size)
 
-    def _read_data(self, data_dir):
+    def data2(self, window_size=1):
+        return self._window_data(self._processed_data1, window_size)
+
+    def data(self, representation_type, window_size=1):
+        return [self.data1(window_size), self.data2(window_size)][representation_type - 1]
+
+    def _read_data(self):
         # Read data points
-        datapoints_file_path = os.path.join(data_dir, "{}_{}_datapoints.txt".format(self._user_label, self._class_label))
+        datapoints_file_path = os.path.join(DATADIR, "{}_{}_datapoints.txt".format(self._user_label, self._class_label))
         with open(datapoints_file_path, "r") as f:
             reader = csv.reader(f, delimiter=' ')
             next(reader)  # Skip header
@@ -63,7 +74,7 @@ class GFEData:
                 frame_data = np.transpose(np.array(values).reshape(-1, 3))
                 self._frame_data.append(frame_data)
         # Read target values
-        targets_file_path = os.path.join(data_dir, "{}_{}_targets.txt".format(self._user_label, self._class_label))
+        targets_file_path = os.path.join(DATADIR, "{}_{}_targets.txt".format(self._user_label, self._class_label))
         with open(targets_file_path, "r") as f:
             for line in f:
                 self._target_values.append(int(line))
@@ -205,23 +216,40 @@ class GFEDataPlotter:
 
 
 def train_and_predict(clf, training_data, testing_data, write_report=True):
-    clf.fit(training_data.data1, training_data.target)
-    predicted = clf.predict(testing_data.data1)
-    actual = testing_data.target
-    if write_report:
-        print(metrics.classification_report(actual, predicted, target_names=["Affirmative", "Negative"]))
-        #print(metrics.confusion_matrix(actual, predicted, labels=[0, 1]))
-    return (predicted, actual)
+    frp_strings = []
+    error_counter = 0
+    for representation_type in [1, 2]:
+        for window_size in [1, 5]:
+            clf.fit(training_data.data(representation_type, window_size), training_data.target(window_size))
+            predicted = clf.predict(testing_data.data(representation_type, window_size))
+            actual = testing_data.target(window_size)
+            while True:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    classification_report = metrics.classification_report(actual, predicted, target_names=["Affirmative", "Negative"])
+                if write_report:
+                    print(classification_report)
+                    #print(metrics.confusion_matrix(actual, predicted, labels=[0, 1]))
+                ###### affirm_line = classification_report.split('\n')[2]
+                affirm_line = classification_report.split('\n')[2]
+                p, r, f1 = affirm_line.split()[1:-1]
+                if "0.00" in (p, r, f1):
+                    if error_counter < 3:
+                        error_counter += 1
+                        continue
+                    else:
+                        p = r = f1 = "----"
+                error_counter = 0
+                break
+            frp_strings.append("%s-%s-%s" % (f1, r, p))
+    return frp_strings
 
 
 if __name__=="__main__":
 
-    src_dir = os.path.dirname(__file__)
-    data_dir = os.path.join(src_dir, "data")
+    gfe_labels = ["affirmative", "conditional", "doubt_question", "emphasis", "negative",
+                  "relative", "topics", "wh_question", "yn_question"]
 
-    # Class labels: "affirmative", "conditional", "doubt_question", "emphasis", "negative", "relative", "topics", "wh_question", "yn_question"
-    training_data = GFEData("a", "emphasis", data_dir )
-    testing_data = GFEData("b", "emphasis", data_dir )
 
     # Plot
     # plotter = GFEDataPlotter(training_data)
@@ -233,15 +261,54 @@ if __name__=="__main__":
     # clf = svm.SVC()
 
     # Sci-Kit Learn Multi-Layer Perceptron
+    gfe_label = "emphasis"
+    training_data = GFEData("a", gfe_label)
+    testing_data = GFEData("b", gfe_label)
+    print("\nAlpha variation in multi-layer perceptron (%s)" % gfe_label)
+    print("\n| alpha             |       w = 1              w > 1       |       w = 1              w > 1       |")
+    print(  "---------------------------------------------------------------------------------------------------")
     for alpha in np.logspace(-5, -1, 5):
-        print("\nAlpha: %f\n" % alpha)
         clf = neural_network.MLPClassifier(solver='lbfgs', alpha=alpha, hidden_layer_sizes=(10,))
-        train_and_predict(clf, training_data, testing_data)
+        frp1, frp2, frp3, frp4 = train_and_predict(clf, training_data, testing_data, False)
+        print("| {:<17} | {:>15}  {:>15} (5) | {:>15}  {:>15} (5) |".format(alpha, frp1, frp2, frp3, frp4))
+    print()
 
-    #clf.fit(training_data.data1, training_data.target)
-    #predicted = clf.predict(testing_data.data1)
-    #actual = testing_data.target
 
-    #for alpha in np.logspace(-5, -1, 5):
-    #    print()
-    #print(metrics.classification_report(actual, predicted, target_names=["Affirmative", "Negative"]))
+
+    clf = neural_network.MLPClassifier(solver='lbfgs', alpha=1e-4, hidden_layer_sizes=(10,))
+    print("\nMulti-layer perceptron with lbfgs solver, 10 hidden layers and alpha = 1e-4")
+    print("\n| GFE               |       w = 1              w > 1       |       w = 1              w > 1       |")
+    print(  "---------------------------------------------------------------------------------------------------")
+    for gfe_label in gfe_labels:
+        training_data = GFEData("a", gfe_label)
+        testing_data = GFEData("b", gfe_label)
+        frp1, frp2, frp3, frp4 = train_and_predict(clf, training_data, testing_data, False)
+        print("| {:<17} | {:>15}  {:>15} (5) | {:>15}  {:>15} (5) |".format(gfe_label, frp1, frp2, frp3, frp4))
+    print()
+
+
+    # Sci-Kit Learn Multi-Layer Perceptron
+    gfe_label = "emphasis"
+    training_data = GFEData("a", gfe_label)
+    testing_data = GFEData("b", gfe_label)
+    print("\nC variation in support vector machine (%s)" % gfe_label)
+    print("\n| C                 |       w = 1              w > 1       |       w = 1              w > 1       |")
+    print(  "---------------------------------------------------------------------------------------------------")
+    for c_value in [1., 10., 100.]:
+        clf = svm.SVC(C=c_value)
+        frp1, frp2, frp3, frp4 = train_and_predict(clf, training_data, testing_data, False)
+        print("| {:<17} | {:>15}  {:>15} (5) | {:>15}  {:>15} (5) |".format(c_value, frp1, frp2, frp3, frp4))
+    print()
+
+
+    # Sci-Kit Learn Support Vector Machine Classifier with user set gamma and C
+    clf = svm.SVC(C=100.)
+    print("\nMulti-layer perceptron with lbfgs solver, 10 hidden layers and alpha = 1e-4")
+    print("\n| GFE               |       w = 1              w > 1       |       w = 1              w > 1       |")
+    print(  "---------------------------------------------------------------------------------------------------")
+    for gfe_label in gfe_labels:
+        training_data = GFEData("a", gfe_label)
+        testing_data = GFEData("b", gfe_label)
+        frp1, frp2, frp3, frp4 = train_and_predict(clf, training_data, testing_data, False)
+        print("| {:<17} | {:>15}  {:>15} (5) | {:>15}  {:>15} (5) |".format(gfe_label, frp1, frp2, frp3, frp4))
+    print()
